@@ -9,6 +9,8 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils.dataframe import dataframe_to_rows
+from io import BytesIO
+
 from dotenv import load_dotenv
 
 # Load .env
@@ -119,17 +121,19 @@ for r in dataframe_to_rows(df, index=False, header=True):
     ws.append(r)
 
 # 이미지 삽입
+# 이미지 삽입
 for row_idx, ad in enumerate(results, start=2):  # 1행은 헤더
     ad_id = ad["Ad ID"]
     if ad_id in image_dict:
         image = image_dict[ad_id]
-        img_path = f"temp_{ad_id}.png"
-        image.thumbnail((100, 100))  # 크기 조절
-        image.save(img_path)
-        img = XLImage(img_path)
+        image.thumbnail((100, 100))
+        image_bytes = BytesIO()
+        image.save(image_bytes, format='PNG')
+        image_bytes.seek(0)
+
+        img = XLImage(image_bytes)
         img.width, img.height = 80, 80
         ws.add_image(img, f"H{row_idx}")  # H 열 (Image URL 대신)
-        os.remove(img_path)
 
 # 엑셀 저장
 output_dir = os.path.join(os.getcwd(), "data")
