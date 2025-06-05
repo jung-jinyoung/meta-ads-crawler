@@ -1,77 +1,45 @@
 import requests
-import json
 import os
-import time
-from datetime import date
-from io import BytesIO
-from PIL import Image
-import pandas as pd
-from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XLImage
-from openpyxl.utils.dataframe import dataframe_to_rows
-from io import BytesIO
-
+import re
 from dotenv import load_dotenv
 
-# Load .env
+# 환경 변수 로드
 load_dotenv(override=True)
 
-# 환경 변수
 my_token = os.getenv("ACCESS_TOKEN")
 my_acc_id = os.getenv("ACT_ID")
 my_version = os.getenv("VERSION")
 BASE_URL = f"https://graph.facebook.com/{my_version}"
 
-# 날짜
-time_range = {
-    "since": "2024-11-06",
-    "until": "2024-11-06"
-}
+# 저장할 폴더 경로
+SAVE_DIR = "./data"
+os.makedirs(SAVE_DIR, exist_ok=True)
 
-# 결과 저장용 리스트
-results = []
+# 파일 이름 안전하게 변환
+def clean_filename(name):
+    return re.sub(r'[\\/*?:"<>|]', "_", name)
 
-# 광고 목록
+# 광고 목록 조회
 ads_url = f"{BASE_URL}/{my_acc_id}/ads"
 ads_params = {
-    "fields": "id,name,status,creative",
-    "access_token": my_token
+    "fields": "id,name,creative",
+    "access_token": my_token,
+    "time_range": {
+    "since": "2025-05-06",
+    "until": "2025-06-06"
+}
 }
 ads_response = requests.get(ads_url, params=ads_params).json()
 ads_data = ads_response.get("data", [])
 
-print(f"📦 총 {len(ads_data)}개의 광고에서 성과 조회 시작...\n")
+print(f"📦 총 {len(ads_data)}개의 광고 이미지 저장 시작...\n")
 
-# 이미지 저장용 딕셔너리
-image_dict = {}
-
-# 광고별 데이터 수집
 for ad in ads_data:
     ad_id = ad.get("id")
-    ad_name = ad.get("name", "-")
+    ad_name = ad.get("name")
     creative_id = ad.get("creative", {}).get("id")
 
-    # 성과 데이터 조회
-    insights_url = f"{BASE_URL}/{ad_id}/insights"
-    insights_params = {
-        "access_token": my_token,
-        "fields": "impressions,clicks,reach,spend",
-        "time_range": time_range
-    }
-
-    insights_res = requests.get(insights_url, params=insights_params).json()
-    insights_data = insights_res.get("data", [])
-
-    if insights_data:
-        insight = insights_data[0]
-        impressions = insight.get("impressions", "-")
-        clicks = insight.get("clicks", "-")
-        reach = insight.get("reach", "-")
-        spend = insight.get("spend", "-")
-    else:
-        impressions = clicks = reach = spend = "-"
-
-    # 크리에이티브 이미지 URL 조회
+    # 썸네일 URL 추출
     thumbnail_url = "N/A"
     if creative_id:
         creative_url = f"{BASE_URL}/{creative_id}"
@@ -88,57 +56,25 @@ for ad in ads_data:
             or "N/A"
         )
 
-    # 이미지 다운로드 및 저장
-    image = None
-    if thumbnail_url.startswith("http"):
+    print(f"📣 광고: {ad_name}")
+    print(f"🖼️ 썸네일 URL: {thumbnail_url}")
+
+    # 이미지 저장
+    if thumbnail_url != "N/A":
         try:
-            img_data = requests.get(thumbnail_url).content
-            image = Image.open(BytesIO(img_data))
-            image_dict[ad_id] = image
-        except:
-            image = None
+            image_res = requests.get(thumbnail_url, stream=True)
+            if image_res.status_code == 200:
+                safe_ad_name = clean_filename(ad_name)
+                file_path = os.path.join(SAVE_DIR, f"{safe_ad_name}.jpg")
+                with open(file_path, "wb") as f:
+                    for chunk in image_res.iter_content(1024):
+                        f.write(chunk)
+                print(f"✅ 이미지 저장 완료: {file_path}")
+            else:
+                print(f"❌ 이미지 다운로드 실패 (Status Code: {image_res.status_code})")
+        except Exception as e:
+            print(f"❌ 이미지 저장 중 오류 발생: {e}")
+    else:
+        print(ad_name, "⚠️ 썸네일 URL이 없어 이미지 저장 생략")
 
-    results.append({
-        "Ad Name": ad_name,
-        "Ad ID": ad_id,
-        "Impressions": impressions,
-        "Clicks": clicks,
-        "Reach": reach,
-        "Spend": spend,
-        "Image URL": thumbnail_url  # 참고용 URL
-    })
-
-# DataFrame 생성
-df = pd.DataFrame(results)
-
-# 엑셀 파일 생성
-wb = Workbook()
-ws = wb.active
-ws.title = "Ad Insights"
-
-# DataFrame을 엑셀로 쓰기
-for r in dataframe_to_rows(df, index=False, header=True):
-    ws.append(r)
-
-# 이미지 삽입
-# 이미지 삽입
-for row_idx, ad in enumerate(results, start=2):  # 1행은 헤더
-    ad_id = ad["Ad ID"]
-    if ad_id in image_dict:
-        image = image_dict[ad_id]
-        image.thumbnail((100, 100))
-        image_bytes = BytesIO()
-        image.save(image_bytes, format='PNG')
-        image_bytes.seek(0)
-
-        img = XLImage(image_bytes)
-        img.width, img.height = 80, 80
-        ws.add_image(img, f"H{row_idx}")  # H 열 (Image URL 대신)
-
-# 엑셀 저장
-output_dir = os.path.join(os.getcwd(), "data")
-os.makedirs(output_dir, exist_ok=True)
-
-save_path = os.path.join(output_dir, "facebook_ad_insights.xlsx")
-wb.save(save_path)
-print(f"✅ 엑셀 저장 완료: {save_path}")
+    print("-" * 50)
