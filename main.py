@@ -2,6 +2,8 @@ import requests
 import os
 import re
 from dotenv import load_dotenv
+from datetime import datetime
+
 
 # 환경 변수 로드
 load_dotenv(override=True)
@@ -19,28 +21,63 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 def clean_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "_", name)
 
-# 광고 목록 조회
-ads_url = f"{BASE_URL}/{my_acc_id}/ads"
-ads_params = {
-    "fields": "id,name,creative",
-    "access_token": my_token,
-    "time_range": {
-    "since": "2025-05-06",
-    "until": "2025-06-06"
-}
-}
-ads_response = requests.get(ads_url, params=ads_params).json()
-ads_data = ads_response.get("data", [])
+# 날짜 필터링
+def is_date_in_range(start, end, filter_start, filter_end):
+    fmt = "%Y-%m-%d"
+    return datetime.strptime(end, fmt) >= datetime.strptime(filter_start, fmt) or \
+           datetime.strptime(start, fmt) <= datetime.strptime(filter_end, fmt)
 
-print(f"📦 총 {len(ads_data)}개의 광고 이미지 저장 시작...\n")
+# 필터 기준 날짜 : yyyy-mm-dd
+FILTER_START = "2025-05-09"
+FILTER_END = "2025-06-07"
+
+ads_url = (
+    f"{BASE_URL}/{my_acc_id}/ads"
+    "?fields=id,name,creative,configured_status,adset_id"
+    "&configured_status=['ACTIVE']"
+    f"&access_token={my_token}"
+)
+
+ads_response = requests.get(ads_url).json()
+ads_data = ads_response.get("data", [])
+print(f"📦 총 {len(ads_data)}개의 광고 이미지 필터링 시작...\n")
+
+# 날짜 필터링 광고 데이터 리스트 초기화
+filtered_ads = []
 
 for ad in ads_data:
     ad_id = ad.get("id")
     ad_name = ad.get("name")
-    creative_id = ad.get("creative", {}).get("id")
+    adset_id = ad.get("adset_id")
+    if not adset_id:
+        continue
 
-    # 썸네일 URL 추출
+    # 광고셋의 기간 확인
+    adset_url = f"{BASE_URL}/{adset_id}"
+    adset_params = {
+        "fields": "start_time,end_time",
+        "access_token": my_token
+    }
+    adset_res = requests.get(adset_url, params=adset_params).json()
+    start_time = adset_res.get("start_time", "")[:10]
+    end_time = adset_res.get("end_time", "")[:10]
+    print(ad_name, start_time, end_time)
+
+    if start_time and end_time and is_date_in_range(start_time, end_time, FILTER_START, FILTER_END):
+        ad["creative_id"] = ad.get("creative", {}).get("id")
+        filtered_ads.append(ad)
+    elif start_time and not end_time and is_date_in_range(start_time, start_time, FILTER_START, FILTER_END):
+        ad["creative_id"] = ad.get("creative", {}).get("id")
+        filtered_ads.append(ad)
+
+print(f"📦 총 {len(filtered_ads)}개의 광고 이미지 저장 시작...\n")
+
+# 이미지 저장
+for ad in filtered_ads:
+    ad_name = ad.get("name")
+    creative_id = ad.get("creative_id")
     thumbnail_url = "N/A"
+
     if creative_id:
         creative_url = f"{BASE_URL}/{creative_id}"
         creative_params = {
@@ -56,10 +93,6 @@ for ad in ads_data:
             or "N/A"
         )
 
-    print(f"📣 광고: {ad_name}")
-    print(f"🖼️ 썸네일 URL: {thumbnail_url}")
-
-    # 이미지 저장
     if thumbnail_url != "N/A":
         try:
             image_res = requests.get(thumbnail_url, stream=True)
@@ -75,6 +108,6 @@ for ad in ads_data:
         except Exception as e:
             print(f"❌ 이미지 저장 중 오류 발생: {e}")
     else:
-        print(ad_name, "⚠️ 썸네일 URL이 없어 이미지 저장 생략")
+        print(f"⚠️ 썸네일 URL 없음 - 이미지 저장 생략")
 
     print("-" * 50)
